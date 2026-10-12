@@ -213,7 +213,21 @@ pub fn parse_asset_name(name: &str, stems: &[&str]) -> Option<AssetName> {
 /// The best asset of `release` for `platform`, trying `kinds` in order and, within a kind, the
 /// platform's tokens in order (native before emulated).
 pub fn pick_asset<'a>(release: &'a Release, stems: &[&str], platform: Platform, kinds: &[PackageKind]) -> Option<(&'a Asset, PackageKind)> {
-    let parsed: Vec<(&Asset, AssetName)> = release.assets.iter().filter_map(|a| parse_asset_name(&a.name, stems).map(|n| (a, n))).collect();
+    let parsed: Vec<(&Asset, AssetName)> = release
+        .assets
+        .iter()
+        .filter_map(|asset| {
+            let name = parse_asset_name(&asset.name, stems)?;
+            // A correctly hosted release can still accidentally contain a build
+            // with an older version in its filename. Never select it as an update.
+            if let Some(published) = release.version.as_ref()
+                && !crate::version::parse(&name.version).is_some_and(|actual| crate::version::compare(&actual, published).is_eq())
+            {
+                return None;
+            }
+            Some((asset, name))
+        })
+        .collect();
     for kind in kinds {
         for token in platform.tokens() {
             if let Some((asset, _)) = parsed.iter().find(|(_, n)| n.kind == *kind && n.token == *token) {
@@ -299,6 +313,27 @@ mod tests {
             pick_asset(&r_riscv_deb, &["photocraft"], p_riscv, p_riscv.download_kinds()).map(|(a, _)| a.name.clone()).as_deref(),
             Some("photocraft-0.5.0-linux-riscv64.deb")
         );
+    }
+
+    #[test]
+    fn never_picks_a_build_from_another_version_of_the_release() {
+        let mut listed = release(&["photocraft-0.4.9-linux-x86_64.AppImage", "photocraft-0.5.0-linux-x86_64.AppImage"]);
+        listed.version = crate::version::parse("v0.5.0");
+        let platform = Platform { os: Os::Linux, arch: Arch::X64 };
+        let pick = |r: &Release| pick_asset(r, &["photocraft"], platform, &[PackageKind::AppImage]).map(|(asset, _)| asset.name.clone());
+        assert_eq!(pick(&listed).as_deref(), Some("photocraft-0.5.0-linux-x86_64.AppImage"));
+
+        listed.assets.retain(|asset| asset.name.contains("0.4.9"));
+        assert_eq!(pick(&listed), None, "an older binary must not satisfy a newer release");
+    }
+
+    #[test]
+    fn prerelease_builds_must_match_the_published_prerelease() {
+        let mut listed = release(&["photocraft-0.6.0-rc.1-windows-x64.msi", "photocraft-0.6.0-rc.2-windows-x64.msi"]);
+        listed.version = crate::version::parse("v0.6.0-rc.2");
+        let platform = Platform { os: Os::Windows, arch: Arch::X64 };
+        let selected = pick_asset(&listed, &["photocraft"], platform, &[PackageKind::Msi]).map(|(asset, _)| asset.name.clone());
+        assert_eq!(selected.as_deref(), Some("photocraft-0.6.0-rc.2-windows-x64.msi"));
     }
 
     #[test]

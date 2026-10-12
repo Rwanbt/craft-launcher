@@ -65,6 +65,13 @@ pub fn download_prefix(repo: &str) -> String {
     format!("https://github.com/{repo}/releases/download/")
 }
 
+/// Accept an asset only when its URL identifies the advertised file of this exact release.
+/// A repo-wide prefix alone also accepts a different tag or a different asset name.
+pub fn valid_release_download(url: &str, repo: &str, tag: &str, name: &str) -> bool {
+    let prefix = download_prefix(repo);
+    url.strip_prefix(&prefix).and_then(|path| path.strip_prefix(tag)).and_then(|path| path.strip_prefix('/')).is_some_and(|file| file == name)
+}
+
 /// Reads `GET /repos/<repo>/releases/latest` (or one element of `/releases`).
 pub fn parse_github_release(json: &str, repo: &str) -> Result<Release, String> {
     let v: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("unreadable answer from GitHub ({e})"))?;
@@ -104,14 +111,13 @@ fn release_from_value(v: &serde_json::Value, repo: &str) -> Result<Release, Stri
         .as_str()
         .filter(|u| u.strip_prefix(&releases).is_some_and(|rest| rest.starts_with('/') && !rest.contains(['?', '#', '\\'])))
         .map_or_else(|| releases.clone(), str::to_string);
-    let prefix = download_prefix(repo);
     let assets = v["assets"]
         .as_array()
         .map(|list| {
             list.iter()
                 .filter_map(|a| {
                     let name = a["name"].as_str().filter(|n| valid_file_name(n))?.to_string();
-                    let url = a["browser_download_url"].as_str().filter(|u| u.starts_with(&prefix) && !u.contains(['?', '#', '\\']))?.to_string();
+                    let url = a["browser_download_url"].as_str().filter(|u| valid_release_download(u, repo, &tag, &name))?.to_string();
                     let sha256 = a["digest"].as_str().and_then(|d| d.strip_prefix("sha256:")).filter(|h| is_hex64(h)).map(str::to_ascii_lowercase);
                     Some(Asset { name, size: a["size"].as_u64().unwrap_or(0), url, sha256 })
                 })
@@ -217,6 +223,24 @@ mod tests {
         assert_eq!(r.assets.len(), 1);
         assert_eq!(r.assets[0].sha256.as_deref(), Some(HASH));
         assert_eq!(r.assets[0].size, 123);
+    }
+
+    #[test]
+    fn release_assets_must_match_the_tag_and_name_exactly() {
+        const NAME: &str = "photocraft-0.5.0-macos-universal.dmg";
+        const GOOD: &str = "https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-macos-universal.dmg";
+        assert!(valid_release_download(GOOD, REPO, "v0.5.0", NAME));
+        for bad in [
+            "https://github.com/storytold/photocraft/releases/download/v0.4.0/photocraft-0.5.0-macos-universal.dmg",
+            "https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.4.0-macos-universal.dmg",
+            "https://github.com/storytold/photocraft/releases/download/v0.5.0/extra/photocraft-0.5.0-macos-universal.dmg",
+            "https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-macos-universal.dmg?download=1",
+            "https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-macos-universal.dmg/extra",
+        ] {
+            assert!(!valid_release_download(bad, REPO, "v0.5.0", NAME), "{bad}");
+            assert!(parse_github_release(&api_json(bad), REPO).unwrap().assets.is_empty(), "{bad}");
+        }
+        assert_eq!(parse_github_release(&api_json(GOOD), REPO).unwrap().assets.len(), 1);
     }
 
     #[test]
