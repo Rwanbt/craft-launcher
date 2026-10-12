@@ -17,13 +17,7 @@ pub enum TrayAction {
 
 /// Pure mapping from native menu ids to launcher actions. Unknown/old menu
 /// events are ignored, never treated as an accidental Quit or external link.
-fn menu_action(
-    id: &MenuId,
-    show: &MenuId,
-    check: &MenuId,
-    quit: &MenuId,
-    links: &[(MenuId, &'static str)],
-) -> Option<TrayAction> {
+fn menu_action(id: &MenuId, show: &MenuId, check: &MenuId, quit: &MenuId, links: &[(MenuId, &'static str)]) -> Option<TrayAction> {
     if id == show {
         Some(TrayAction::Show)
     } else if id == check {
@@ -31,7 +25,7 @@ fn menu_action(
     } else if id == quit {
         Some(TrayAction::Quit)
     } else {
-        links.iter().find(|(candidate, _)| candidate == id).map(|(_, url)| TrayAction::Open(url))
+        links.iter().find(|(candidate, _)| candidate == id).map(|(_, url)| TrayAction::Open(*url))
     }
 }
 
