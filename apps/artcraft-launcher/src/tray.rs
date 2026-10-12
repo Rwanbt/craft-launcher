@@ -25,7 +25,7 @@ fn menu_action(id: &MenuId, show: &MenuId, check: &MenuId, quit: &MenuId, links:
     } else if id == quit {
         Some(TrayAction::Quit)
     } else {
-        links.iter().find(|(candidate, _)| candidate == id).map(|(_, url)| TrayAction::Open(*url))
+        links.iter().find(|(candidate, _)| candidate == id).map(|(_, url)| TrayAction::Open(url))
     }
 }
 
