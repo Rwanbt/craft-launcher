@@ -197,7 +197,7 @@ mod tests {
         assert!(autostart_entry(std::path::Path::new("")).is_err());
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn xdg_login_rejects_non_utf8_paths_instead_of_mangling_them() {
         use std::os::unix::ffi::OsStrExt;
