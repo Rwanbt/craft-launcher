@@ -203,10 +203,7 @@ mod tests {
         let original = source(&path);
         assert_eq!(original.cached(REPO, false), None);
         let expected = release("v0.5.0");
-        original.store(
-            REPO,
-            Entry { etag: Some("\"etag-1\"".into()), release: Some(expected.clone()), prereleases: false, fetched_at: 123 },
-        );
+        original.store(REPO, Entry { etag: Some("\"etag-1\"".into()), release: Some(expected.clone()), prereleases: false, fetched_at: 123 });
         assert_eq!(original.cached(REPO, false), Some(LatestRelease::Found(expected.clone())));
         original.save();
 
