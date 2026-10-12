@@ -36,7 +36,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
+            libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev desktop-file-utils
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -53,6 +53,10 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --locked
+
+      - name: Validate Linux autostart entry using freedesktop.org tooling
+        if: runner.os == 'Linux'
+        run: cargo test -p artcraft-launcher-native --locked xdg_entry_passes_freedesktop_validator -- --ignored
 
   wasm:
     name: wasm32 check + trunk build
