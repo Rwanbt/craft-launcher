@@ -179,3 +179,87 @@ impl ReleaseSource for GitHubSource {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const REPO: &str = "storytold/photocraft";
+
+    fn source(path: &std::path::Path) -> GitHubSource {
+        // Constructing an HTTP client does not make a network request. The tests
+        // exercise only on-disk cache methods, never the live release APIs.
+        GitHubSource::new(Http::new().unwrap(), path.to_path_buf())
+    }
+
+    fn release(tag: &str) -> Release {
+        Release { tag: tag.to_string(), version: artcraft_launcher_core::version::parse(tag), ..Release::default() }
+    }
+
+    #[test]
+    fn release_cache_survives_restart_with_matching_prerelease_setting() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("releases.json");
+        let original = source(&path);
+        assert_eq!(original.cached(REPO, false), None);
+        let expected = release("v0.5.0");
+        original.store(
+            REPO,
+            Entry { etag: Some("\"etag-1\"".into()), release: Some(expected.clone()), prereleases: false, fetched_at: 123 },
+        );
+        assert_eq!(original.cached(REPO, false), Some(LatestRelease::Found(expected.clone())));
+        original.save();
+
+        let persisted: CacheFile = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let record = persisted.entries.get(REPO).unwrap();
+        assert_eq!(record.etag.as_deref(), Some("\"etag-1\""));
+        assert_eq!(record.fetched_at, 123);
+        assert_eq!(record.release.as_ref(), Some(&expected));
+
+        let restored = source(&path);
+        assert_eq!(restored.cached(REPO, false), Some(LatestRelease::Found(expected)));
+        assert_eq!(restored.cached(REPO, true), None);
+        assert_eq!(restored.cached("storytold/wordcraft", false), None);
+    }
+
+    #[test]
+    fn an_explicit_no_release_answer_differs_from_a_missing_cache_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = source(&dir.path().join("releases.json"));
+        source.store(REPO, Entry { etag: None, release: None, prereleases: false, fetched_at: 9 });
+        assert_eq!(source.cached(REPO, false), Some(LatestRelease::None));
+        assert_eq!(source.cached(REPO, true), None);
+        assert_eq!(source.cached("storytold/wordcraft", false), None);
+    }
+
+    #[test]
+    fn changing_prerelease_mode_does_not_reuse_an_incompatible_answer() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = source(&dir.path().join("releases.json"));
+        let stable = release("v0.5.0");
+        source.store(REPO, Entry { etag: None, release: Some(stable), prereleases: false, fetched_at: 1 });
+        assert_eq!(source.cached(REPO, true), None);
+
+        let preview = release("v0.6.0-rc.1");
+        source.store(REPO, Entry { etag: None, release: Some(preview.clone()), prereleases: true, fetched_at: 2 });
+        assert_eq!(source.cached(REPO, true), Some(LatestRelease::Found(preview)));
+        assert_eq!(source.cached(REPO, false), None);
+    }
+
+    #[test]
+    fn missing_and_corrupt_cache_files_are_treated_as_unavailable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("releases.json");
+        assert_eq!(source(&path).cached(REPO, false), None);
+
+        for broken in [
+            b"{not json".as_slice(),
+            br#"{"entries":{"storytold/photocraft":{"etag":42}}}"#.as_slice(),
+            br#"{"entries": [1, 2, 3]}"#.as_slice(),
+            b"null".as_slice(),
+        ] {
+            std::fs::write(&path, broken).unwrap();
+            assert_eq!(source(&path).cached(REPO, false), None);
+        }
+    }
+}
