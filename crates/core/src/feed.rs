@@ -187,8 +187,7 @@ impl FeedRelease {
     fn to_release(&self, repo: &str, mirror: Option<&str>) -> Option<Release> {
         let version = version::parse(&self.tag)?;
         let allowed = |name: &str, url: &str| {
-            release::valid_release_download(url, repo, &self.tag, name)
-                || mirror.is_some_and(|m| url.starts_with(m) && !url.contains(".."))
+            release::valid_release_download(url, repo, &self.tag, name) || mirror.is_some_and(|m| url.starts_with(m) && !url.contains(".."))
         };
         let releases_page = format!("https://github.com/{repo}/releases/");
         let assets = self
