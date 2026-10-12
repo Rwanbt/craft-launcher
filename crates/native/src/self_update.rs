@@ -246,13 +246,15 @@ pub fn update(
 fn replace_appimage(new: &Path, path: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
     let dir = path.parent().ok_or("the AppImage isn't in a folder")?;
-    let staged = dir.join(format!(".{}.update", path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
-    std::fs::copy(new, &staged).map_err(|e| format!("couldn't write next to {} ({e})", path.display()))?;
-    std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
-    std::fs::rename(&staged, path).map_err(|e| {
-        let _ = std::fs::remove_file(&staged);
-        format!("couldn't replace {} ({e})", path.display())
-    })
+    // A predictable staging name can be pre-created as a symlink and make
+    // copy() overwrite an unrelated file. A unique exclusive temp file avoids
+    // both that and collisions between overlapping update attempts.
+    let staged = tempfile::NamedTempFile::new_in(dir).map_err(|e| format!("couldn't stage next to {} ({e})", path.display()))?;
+    std::fs::copy(new, staged.path()).map_err(|e| format!("couldn't write next to {} ({e})", path.display()))?;
+    std::fs::set_permissions(staged.path(), std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+    staged.as_file().sync_all().map_err(|e| e.to_string())?;
+    staged.persist(path).map_err(|e| format!("couldn't replace {} ({e})", path.display()))?;
+    Ok(())
 }
 
 /// Starts `sh`, which waits for `pid` to exit and then runs `command`. Detached, so it outlives us.
@@ -405,6 +407,44 @@ mod tests {
         assert_eq!(placed, current);
         assert_eq!(std::fs::read_to_string(current.join("Contents/MacOS/ArtCraft Launcher")).unwrap(), "0.2.0");
         assert!(!dir.path().join("Applications/.ArtCraft Launcher.app.partial").exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn appimage_swap_ignores_an_unsafe_legacy_staging_symlink() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("ArtCraft.AppImage");
+        let incoming = dir.path().join("download.part");
+        let private = dir.path().join("unrelated-user-file.txt");
+        std::fs::write(&existing, b"original image").unwrap();
+        std::fs::write(&incoming, b"new verified image").unwrap();
+        std::fs::write(&private, b"do not modify").unwrap();
+        let legacy = dir.path().join(".ArtCraft.AppImage.update");
+        symlink(&private, &legacy).unwrap();
+
+        replace_appimage(&incoming, &existing).unwrap();
+
+        assert_eq!(std::fs::read(&existing).unwrap(), b"new verified image");
+        assert_eq!(std::fs::read(&private).unwrap(), b"do not modify");
+        assert!(legacy.is_symlink(), "new code must not touch the preexisting link");
+        assert_eq!(std::fs::metadata(&existing).unwrap().permissions().mode() & 0o777, 0o755);
+        assert_eq!(std::fs::read(&incoming).unwrap(), b"new verified image");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_missing_new_appimage_preserves_the_running_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("ArtCraft.AppImage");
+        let incoming = dir.path().join("does-not-exist.part");
+        std::fs::write(&existing, b"working installed copy").unwrap();
+
+        assert!(replace_appimage(&incoming, &existing).is_err());
+        assert_eq!(std::fs::read(&existing).unwrap(), b"working installed copy");
+        let remaining: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+        assert_eq!(remaining, vec![std::ffi::OsString::from("ArtCraft.AppImage")]);
     }
 
     #[test]
