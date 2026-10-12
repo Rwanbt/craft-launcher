@@ -95,10 +95,8 @@ fn windows_run() -> Option<winreg::RegKey> {
     winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER).open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Run").ok()
 }
 
-/// Encodes a path as one Exec argument according to XDG Desktop Entry:
-/// quote reserved characters, escape the whole string value's backslashes,
-/// and double literal percent signs so they are not interpreted as field codes.
-/// Reject paths that cannot be represented without changing the executable.
+/// Generate an XDG Exec command without losing or interpreting path bytes.
+/// Exec quoting and desktop-entry value escaping are separate layers.
 #[cfg(not(any(target_os = "macos", windows)))]
 fn autostart_command(exe: &std::path::Path) -> Result<String, String> {
     let path = exe.to_str().ok_or("the executable path isn't valid UTF-8")?;
@@ -109,27 +107,14 @@ fn autostart_command(exe: &std::path::Path) -> Result<String, String> {
     for c in path.chars() {
         match c {
             '%' => quoted.push_str("%%"),
-            '\\' | '"' | '
-    Ok(dirs::config_dir().ok_or("no config folder")?.join("autostart").join(format!("{ID}.desktop")))
-}
-
-#[cfg(not(windows))]
-fn remove(path: &std::path::Path) -> Result<(), String> {
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(format!("couldn't remove {} ({e})", path.display())),
-    }
-}
- | '\u{60}' => {
+            '\\' | '"' | '\x24' | '\x60' => {
                 quoted.push('\\');
                 quoted.push(c);
             }
             _ => quoted.push(c),
         }
     }
-    // The Desktop Entry string parser consumes a first layer of backslashes,
-    // then the Exec parser consumes the quoting layer.
+    // One escaping layer for Exec, one for the .desktop string value.
     Ok(format!("\"{}\" {HIDDEN_FLAG}", quoted.replace('\\', "\\\\")))
 }
 
