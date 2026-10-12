@@ -85,10 +85,7 @@ pub fn set_enabled(on: bool) -> Result<(), String> {
         if !on {
             return remove(&path);
         }
-        let exe = program()?.display().to_string().replace('"', "\\\"");
-        let entry = format!(
-            "[Desktop Entry]\nType=Application\nName=ArtCraft Launcher\nComment=Install and update the Craft App Suite\nExec=\"{exe}\" {HIDDEN_FLAG}\nIcon={ID}\nTerminal=false\nX-GNOME-Autostart-enabled=true\n"
-        );
+        let entry = autostart_entry(&program()?)?;
         crate::paths::write_atomic(&path, entry.as_bytes())
     }
 }
@@ -96,6 +93,37 @@ pub fn set_enabled(on: bool) -> Result<(), String> {
 #[cfg(windows)]
 fn windows_run() -> Option<winreg::RegKey> {
     winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER).open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Run").ok()
+}
+
+/// Generate an XDG Exec command without losing or interpreting path bytes.
+/// Exec quoting and desktop-entry value escaping are separate layers.
+#[cfg(not(any(target_os = "macos", windows)))]
+fn autostart_command(exe: &std::path::Path) -> Result<String, String> {
+    let path = exe.to_str().ok_or("the executable path isn't valid UTF-8")?;
+    if !exe.is_absolute() || path.chars().any(|c| c.is_control() || c == '=') {
+        return Err("the executable path cannot be represented in an XDG Exec entry".into());
+    }
+    let mut quoted = String::new();
+    for c in path.chars() {
+        match c {
+            '%' => quoted.push_str("%%"),
+            '\\' | '"' | '\x24' | '\x60' => {
+                quoted.push('\\');
+                quoted.push(c);
+            }
+            _ => quoted.push(c),
+        }
+    }
+    // One escaping layer for Exec, one for the .desktop string value.
+    Ok(format!("\"{}\" {HIDDEN_FLAG}", quoted.replace('\\', "\\\\")))
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn autostart_entry(exe: &std::path::Path) -> Result<String, String> {
+    let command = autostart_command(exe)?;
+    Ok(format!(
+        "[Desktop Entry]\nType=Application\nName=ArtCraft Launcher\nComment=Install and update the Craft App Suite\nExec={command}\nIcon={ID}\nTerminal=false\nX-GNOME-Autostart-enabled=true\n"
+    ))
 }
 
 #[cfg(not(any(target_os = "macos", windows)))]
@@ -109,5 +137,69 @@ fn remove(path: &std::path::Path) -> Result<(), String> {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(format!("couldn't remove {} ({e})", path.display())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(not(any(target_os = "macos", windows)))]
+    use super::*;
+
+    #[cfg(not(any(target_os = "macos", windows)))]
+    #[test]
+    fn xdg_login_entry_preserves_spaces_and_hidden_flag() {
+        let entry = autostart_entry(std::path::Path::new("/opt/My ArtCraft Apps/launcher")).unwrap();
+        assert!(entry.starts_with("[Desktop Entry]\nType=Application\n"));
+        assert!(entry.contains("Exec=\"/opt/My ArtCraft Apps/launcher\" --hidden\n"));
+        assert!(entry.contains("X-GNOME-Autostart-enabled=true\n"));
+        assert_eq!(entry.lines().filter(|line| line.starts_with("Exec=")).count(), 1);
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))]
+    #[test]
+    fn xdg_login_exec_escapes_reserved_chars_and_field_codes() {
+        let command = autostart_command(std::path::Path::new("/tmp/a$b`c\\d\"e%f")).unwrap();
+        assert!(command.contains(r"a\\$b"), "{command:?}");
+        assert!(command.contains(r"b\\`c"), "{command:?}");
+        assert!(command.contains(r"c\\\\d"), "{command:?}");
+        assert!(command.contains("e%%f"), "{command:?}");
+        assert!(command.contains(r#"\\\"e"#), "{command:?}");
+        assert!(command.ends_with("\" --hidden"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires desktop-file-validate from desktop-file-utils; run in Linux CI"]
+    fn xdg_entry_passes_freedesktop_validator() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("ai.storyteller.artcraft-launcher.desktop");
+        let generated = autostart_entry(std::path::Path::new("/opt/ArtCraft Apps/bin/app$price%f")).unwrap();
+        std::fs::write(&entry, generated).unwrap();
+        let result = std::process::Command::new("desktop-file-validate").arg(&entry).output().expect("desktop-file-validate must be installed in CI");
+        assert!(result.status.success(), "validator rejected XDG entry: {}", String::from_utf8_lossy(&result.stderr));
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))]
+    #[test]
+    fn xdg_login_rejects_line_injection_and_invalid_executables() {
+        for invalid in [
+            "/opt/launcher\nHidden=true",
+            "/opt/launcher\rExec=other",
+            "/opt/launcher\tbad",
+            "/opt/launcher=bad",
+            "relative/launcher",
+        ] {
+            assert!(autostart_entry(std::path::Path::new(invalid)).is_err(), "{invalid:?}");
+        }
+        assert!(autostart_entry(std::path::Path::new("")).is_err());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn xdg_login_rejects_non_utf8_paths_instead_of_mangling_them() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let invalid = std::ffi::OsStr::from_bytes(b"/tmp/app-\xff");
+        assert!(autostart_entry(std::path::Path::new(invalid)).is_err());
     }
 }
