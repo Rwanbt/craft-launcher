@@ -69,10 +69,7 @@ pub fn download_prefix(repo: &str) -> String {
 /// A repo-wide prefix alone also accepts a different tag or a different asset name.
 pub fn valid_release_download(url: &str, repo: &str, tag: &str, name: &str) -> bool {
     let prefix = download_prefix(repo);
-    url.strip_prefix(&prefix)
-        .and_then(|path| path.strip_prefix(tag))
-        .and_then(|path| path.strip_prefix('/'))
-        .is_some_and(|file| file == name)
+    url.strip_prefix(&prefix).and_then(|path| path.strip_prefix(tag)).and_then(|path| path.strip_prefix('/')).is_some_and(|file| file == name)
 }
 
 /// Reads `GET /repos/<repo>/releases/latest` (or one element of `/releases`).
