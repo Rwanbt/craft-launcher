@@ -1066,6 +1066,66 @@ mod tests {
     }
 
     #[test]
+    fn backend_event_poll_drains_the_queue_without_replaying_old_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let platform = native_platform().unwrap();
+        let mut backend = backend(dir.path(), platform, None);
+        backend.shared.emit(Event::Paused { app: APP.into(), download: None });
+        backend.shared.emit(Event::ReadyToInstall { app: APP.into(), ready: false });
+        let events = backend.poll();
+        assert_eq!(events.len(), 2);
+        assert!(matches!(&events[0], Event::Paused { app, download: None } if app == APP));
+        assert!(matches!(&events[1], Event::ReadyToInstall { app, ready: false } if app == APP));
+        assert!(backend.poll().is_empty(), "events must be delivered exactly once");
+    }
+
+    #[test]
+    fn launching_an_uninstalled_app_fails_without_starting_a_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut backend = backend(dir.path(), native_platform().unwrap(), None);
+        backend.send(Command::Launch { app: APP.into() });
+        let events = backend.poll();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], Event::JobFinished { app, result: Err(reason) } if app == APP && reason.contains("isn't installed")));
+        assert!(backend.poll().is_empty());
+    }
+
+    #[test]
+    fn revealing_a_missing_installed_path_reports_an_error_instead_of_opening_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut backend = backend(dir.path(), native_platform().unwrap(), None);
+        let missing = dir.path().join("missing-app");
+        backend.shared.installed.lock().unwrap().insert(
+            APP.into(),
+            Installed { version: None, source: InstallSource::Launcher, location: missing.display().to_string(), package: None },
+        );
+        backend.send(Command::Reveal { app: APP.into() });
+        let events = backend.poll();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], Event::JobFinished { app, result: Err(reason) } if app == APP && reason.contains("isn't a file")));
+    }
+
+    #[test]
+    fn native_reveal_labels_and_self_update_capability_follow_the_platform() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut backend = backend(dir.path(), native_platform().unwrap(), None);
+        for (os, label) in [
+            (Os::MacOs, "Show in Finder"),
+            (Os::Windows, "Show in Explorer"),
+            (Os::Linux, "Show in Files"),
+            (Os::FreeBsd, "Show in Files"),
+        ] {
+            backend.platform = Some(Platform { os, arch: Arch::X64 });
+            let capabilities = backend.capabilities();
+            assert_eq!(capabilities.reveal_label, label);
+            assert!(capabilities.manage_apps);
+            assert!(!capabilities.self_update, "a test build must never expose self-update");
+        }
+        backend.platform = None;
+        assert_eq!(backend.capabilities().reveal_label, "Show in Files");
+    }
+
+    #[test]
     fn a_429_stops_the_retries_and_holds_off_the_api() {
         let (url, hits) = serve("429 Too Many Requests");
         let dir = tempfile::tempdir().unwrap();
