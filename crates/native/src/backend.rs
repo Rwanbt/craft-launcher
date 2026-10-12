@@ -1095,10 +1095,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut backend = backend(dir.path(), native_platform().unwrap(), None);
         let missing = dir.path().join("missing-app");
-        backend.shared.installed.lock().unwrap().insert(
-            APP.into(),
-            Installed { version: None, source: InstallSource::Launcher, location: missing.display().to_string(), package: None },
-        );
+        backend
+            .shared
+            .installed
+            .lock()
+            .unwrap()
+            .insert(APP.into(), Installed { version: None, source: InstallSource::Launcher, location: missing.display().to_string(), package: None });
         backend.send(Command::Reveal { app: APP.into() });
         let events = backend.poll();
         assert_eq!(events.len(), 1);
@@ -1109,12 +1111,9 @@ mod tests {
     fn native_reveal_labels_and_self_update_capability_follow_the_platform() {
         let dir = tempfile::tempdir().unwrap();
         let mut backend = backend(dir.path(), native_platform().unwrap(), None);
-        for (os, label) in [
-            (Os::MacOs, "Show in Finder"),
-            (Os::Windows, "Show in Explorer"),
-            (Os::Linux, "Show in Files"),
-            (Os::FreeBsd, "Show in Files"),
-        ] {
+        for (os, label) in
+            [(Os::MacOs, "Show in Finder"), (Os::Windows, "Show in Explorer"), (Os::Linux, "Show in Files"), (Os::FreeBsd, "Show in Files")]
+        {
             backend.platform = Some(Platform { os, arch: Arch::X64 });
             let capabilities = backend.capabilities();
             assert_eq!(capabilities.reveal_label, label);
