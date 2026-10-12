@@ -15,6 +15,35 @@ pub enum TrayAction {
     Quit,
 }
 
+/// Pure mapping from native menu ids to launcher actions. Unknown/old menu
+/// events are ignored, never treated as an accidental Quit or external link.
+fn menu_action(
+    id: &MenuId,
+    show: &MenuId,
+    check: &MenuId,
+    quit: &MenuId,
+    links: &[(MenuId, &'static str)],
+) -> Option<TrayAction> {
+    if id == show {
+        Some(TrayAction::Show)
+    } else if id == check {
+        Some(TrayAction::Check)
+    } else if id == quit {
+        Some(TrayAction::Quit)
+    } else {
+        links.iter().find(|(candidate, _)| candidate == id).map(|(_, url)| TrayAction::Open(url))
+    }
+}
+
+/// Also usable in headless unit tests: no system tray or GUI session required.
+fn updates_tooltip(lang: i18n::Lang, count: usize) -> String {
+    if count == 0 {
+        "ArtCraft Launcher".to_string()
+    } else {
+        i18n::trn(lang, count as u64, "ArtCraft Launcher · {n} update available", "ArtCraft Launcher · {n} updates available")
+    }
+}
+
 pub struct Tray {
     icon: TrayIcon,
     show: MenuId,
@@ -79,17 +108,7 @@ impl Tray {
             let wake = wake.clone();
             let ids = (show_id.clone(), check_id.clone(), quit_id.clone());
             MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
-                let action = if e.id == ids.0 {
-                    TrayAction::Show
-                } else if e.id == ids.1 {
-                    TrayAction::Check
-                } else if e.id == ids.2 {
-                    TrayAction::Quit
-                } else if let Some((_, url)) = links.iter().find(|(id, _)| *id == e.id) {
-                    TrayAction::Open(url)
-                } else {
-                    return;
-                };
+                let Some(action) = menu_action(&e.id, &ids.0, &ids.1, &ids.2, &links) else { return };
                 if matches!(action, TrayAction::Quit) {
                     on_quit();
                 }
@@ -126,11 +145,7 @@ impl Tray {
             }
             self.language = lang.code().to_string();
         }
-        let tip = if count == 0 {
-            "ArtCraft Launcher".to_string()
-        } else {
-            i18n::trn(lang, count as u64, "ArtCraft Launcher · {n} update available", "ArtCraft Launcher · {n} updates available")
-        };
+        let tip = updates_tooltip(lang, count);
         if tip != self.tooltip {
             let _ = self.icon.set_tooltip(Some(&tip));
             self.tooltip = tip;
@@ -146,6 +161,40 @@ impl Tray {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tray_menu_dispatches_only_known_commands() {
+        let show = MenuId::new("show");
+        let check = MenuId::new("check");
+        let quit = MenuId::new("quit");
+        let links = [(MenuId::new("website"), "https://example.test"), (MenuId::new("github"), "https://github.com")];
+        assert!(matches!(menu_action(&show, &show, &check, &quit, &links), Some(TrayAction::Show)));
+        assert!(matches!(menu_action(&check, &show, &check, &quit, &links), Some(TrayAction::Check)));
+        assert!(matches!(menu_action(&quit, &show, &check, &quit, &links), Some(TrayAction::Quit)));
+        assert!(menu_action(&MenuId::new("unknown"), &show, &check, &quit, &links).is_none());
+    }
+
+    #[test]
+    fn tray_links_are_allowlisted_by_menu_identity() {
+        let show = MenuId::new("show");
+        let check = MenuId::new("check");
+        let quit = MenuId::new("quit");
+        let links = [(MenuId::new("website"), "https://example.test"), (MenuId::new("github"), "https://github.com")];
+        let website = menu_action(&MenuId::new("website"), &show, &check, &quit, &links);
+        assert!(matches!(website, Some(TrayAction::Open("https://example.test"))));
+        let github = menu_action(&MenuId::new("github"), &show, &check, &quit, &links);
+        assert!(matches!(github, Some(TrayAction::Open("https://github.com"))));
+        assert!(menu_action(&MenuId::new("stale-menu"), &show, &check, &quit, &links).is_none());
+    }
+
+    #[test]
+    fn tray_update_tooltip_has_correct_english_pluralization() {
+        let lang = i18n::Lang::EN;
+        assert_eq!(updates_tooltip(lang, 0), "ArtCraft Launcher");
+        assert_eq!(updates_tooltip(lang, 1), "ArtCraft Launcher · 1 update available");
+        assert_eq!(updates_tooltip(lang, 2), "ArtCraft Launcher · 2 updates available");
+        assert_eq!(updates_tooltip(lang, 121), "ArtCraft Launcher · 121 updates available");
+    }
 
     #[test]
     fn linux_tray_has_a_stable_id_not_the_process_id() {
