@@ -1218,7 +1218,6 @@ pub mod windows {
 mod tests {
     use super::*;
 
-
     #[cfg(unix)]
     #[test]
     fn tree_inventory_lists_nested_files_in_sorted_relative_order() {
@@ -1229,10 +1228,7 @@ mod tests {
         std::fs::write(root.join("bin/photocraft"), b"executable").unwrap();
         std::fs::write(root.join("share/icons/photocraft.png"), b"icon").unwrap();
 
-        assert_eq!(
-            tree::files(&root),
-            vec![PathBuf::from("bin/photocraft"), PathBuf::from("share/icons/photocraft.png")]
-        );
+        assert_eq!(tree::files(&root), vec![PathBuf::from("bin/photocraft"), PathBuf::from("share/icons/photocraft.png")]);
     }
 
     #[cfg(unix)]
