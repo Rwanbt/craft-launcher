@@ -233,7 +233,6 @@ mod tests {
         sent.iter().map(|s| sent.iter().filter(|t| **t >= *s && **t < s + WINDOW).count()).max().unwrap_or(0)
     }
 
-
     #[test]
     fn extreme_clock_values_do_not_overflow_pacing_or_persistence() {
         // Timestamp extremes model a broken persisted clock; the real clock does
