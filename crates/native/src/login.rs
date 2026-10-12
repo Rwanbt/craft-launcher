@@ -182,6 +182,18 @@ mod tests {
         assert!(command.ends_with("\" --hidden"));
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires desktop-file-validate from desktop-file-utils; run in Linux CI"]
+    fn xdg_entry_passes_freedesktop_validator() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("ai.storyteller.artcraft-launcher.desktop");
+        let generated = autostart_entry(std::path::Path::new("/opt/ArtCraft Apps/bin/app$price%f")).unwrap();
+        std::fs::write(&entry, generated).unwrap();
+        let result = std::process::Command::new("desktop-file-validate").arg(&entry).output().expect("desktop-file-validate must be installed in CI");
+        assert!(result.status.success(), "validator rejected XDG entry: {}", String::from_utf8_lossy(&result.stderr));
+    }
+
     #[cfg(not(any(target_os = "macos", windows)))]
     #[test]
     fn xdg_login_rejects_line_injection_and_invalid_executables() {
