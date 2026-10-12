@@ -91,7 +91,7 @@ impl FeedThrottle {
     pub fn load(file: &Path, now: i64) -> Self {
         let mut saved = std::fs::read(file).ok().and_then(|b| serde_json::from_slice::<Saved>(&b).ok()).unwrap_or_default();
         // A wait far in the future means a broken file or a clock that jumped back: drop it.
-        if saved.not_before > now + MAX_THROTTLE_BACKOFF * 2 {
+        if saved.not_before > now.saturating_add(MAX_THROTTLE_BACKOFF * 2) {
             saved.not_before = 0;
         }
         Self { saved, file: Some(file.to_path_buf()), ..Self::new() }
@@ -102,27 +102,27 @@ impl FeedThrottle {
         let warming = !self.warmed;
         let per_window = if warming { WARM_PER_WINDOW } else { STEADY_PER_WINDOW };
         let mut at = self.saved.not_before;
-        let recent: Vec<i64> = self.sent.iter().copied().filter(|t| now - t < WINDOW).collect();
+        let recent: Vec<i64> = self.sent.iter().copied().filter(|t| now.saturating_sub(*t) < WINDOW).collect();
         if recent.len() >= per_window
             && let Some(oldest) = recent.get(recent.len() - per_window)
         {
-            at = at.max(oldest + WINDOW);
+            at = at.max(oldest.saturating_add(WINDOW));
         }
         if warming && let Some(last) = recent.last() {
             let gap = WARM_GAPS.get(self.saved.failures as usize).or(WARM_GAPS.last()).copied().unwrap_or(WINDOW);
-            at = at.max(last + gap);
+            at = at.max(last.saturating_add(gap));
         }
-        (at - now).max(0)
+        at.saturating_sub(now).max(0)
     }
 
     /// Notes that a request is being sent now.
     pub fn sending(&mut self, now: i64) {
         self.sent.push_back(now);
-        while self.sent.front().is_some_and(|t| now - t >= WINDOW) {
+        while self.sent.front().is_some_and(|t| now.saturating_sub(*t) >= WINDOW) {
             self.sent.pop_front();
         }
         if !self.warmed {
-            self.warm_sent += 1;
+            self.warm_sent = self.warm_sent.saturating_add(1);
             if self.warm_sent >= WARM_REQUESTS {
                 self.warmed = true;
             }
@@ -143,14 +143,14 @@ impl FeedThrottle {
                 // During the first load the doubling gaps in `wait` do the backing off.
                 let backoff = if self.warmed { doubled(FAILURE_BACKOFF, self.saved.failures, MAX_FAILURE_BACKOFF) } else { 0 };
                 let backoff = spread(backoff, 0.4 * jitter - 0.2);
-                self.saved.not_before = now + backoff.max(sane(retry_after));
+                self.saved.not_before = now.saturating_add(backoff.max(sane(retry_after)));
             }
             Outcome::Throttled { retry_after } => {
                 self.warmed = true;
                 self.saved.throttles = self.saved.throttles.saturating_add(1);
                 let backoff = doubled(THROTTLE_BACKOFF, self.saved.throttles, MAX_THROTTLE_BACKOFF);
                 // Only ever later than asked: spreading the herd out, never bringing it back early.
-                self.saved.not_before = now + spread(backoff.max(sane(retry_after)), 0.5 * jitter);
+                self.saved.not_before = now.saturating_add(spread(backoff.max(sane(retry_after)), 0.5 * jitter));
             }
         }
         if self.saved != before {
@@ -231,6 +231,36 @@ mod tests {
 
     fn per_minute_max(sent: &[i64]) -> usize {
         sent.iter().map(|s| sent.iter().filter(|t| **t >= *s && **t < s + WINDOW).count()).max().unwrap_or(0)
+    }
+
+    #[test]
+    fn extreme_clock_values_do_not_overflow_pacing_or_persistence() {
+        // Timestamp extremes model a broken persisted clock; the real clock does
+        // not need to approach these values for the code to remain panic-free.
+        let mut throttle = FeedThrottle::new();
+        throttle.sending(i64::MIN);
+        assert_eq!(throttle.wait(i64::MAX), 0);
+        throttle.sending(i64::MAX);
+
+        // A rate limit near the integer boundary must saturate instead of
+        // wrapping to a time in the past and allowing an early retry.
+        throttle.finished(Outcome::Throttled { retry_after: Some(86_400) }, i64::MAX - 1, 0.5);
+        assert_eq!(throttle.saved.not_before, i64::MAX);
+        assert_eq!(throttle.wait(i64::MAX - 1), 1);
+        assert_eq!(throttle.wait(i64::MAX), 0);
+
+        // A clock that jumps backwards should wait, never overflow or panic.
+        assert_eq!(throttle.wait(i64::MIN), i64::MAX);
+    }
+
+    #[test]
+    fn loading_a_far_future_wait_at_clock_limit_is_safe() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("throttle.json");
+        std::fs::write(&file, format!(r#"{{"not_before":{},"failures":1,"throttles":1}}"#, i64::MAX)).unwrap();
+        let throttle = FeedThrottle::load(&file, i64::MAX - 1);
+        assert_eq!(throttle.wait(i64::MAX - 1), 1);
+        assert_eq!(throttle.wait(i64::MAX), 0);
     }
 
     #[test]
