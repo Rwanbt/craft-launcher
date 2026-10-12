@@ -1,11 +1,12 @@
 # Builds and tests the workspace on FreeBSD, inside a FreeBSD VM on a Linux runner
 # (GitHub has no FreeBSD runners). It then runs packaging/freebsd/package.sh, the script the
 # release job runs, and checks the tarball, so a broken FreeBSD package fails here before it can
-# fail a release. Nothing is uploaded and no secrets are used.
+# fail a release. Relevant installer/manifest changes also run the VM on PRs.
+# Nothing is uploaded and no secrets are used.
 name: FreeBSD
 
 # The VM build is slow, so it runs nightly on main rather than on every push: a drifted
-# dependency still shows up within a day. PRs that change the FreeBSD packaging still run it.
+# dependency still shows up within a day. PRs affecting FreeBSD installation or packaging run it.
 on:
   schedule:
     - cron: "23 2 * * *"
@@ -14,6 +15,10 @@ on:
       - .github/workflows/freebsd.yml
       - packaging/freebsd/**
       - packaging/env.sh
+      - crates/native/src/install.rs
+      - crates/native/src/paths.rs
+      - crates/native/src/manifest.rs
+      - crates/native/Cargo.toml
   workflow_dispatch:
 
 concurrency:
