@@ -317,10 +317,7 @@ mod tests {
 
     #[test]
     fn never_picks_a_build_from_another_version_of_the_release() {
-        let mut listed = release(&[
-            "photocraft-0.4.9-linux-x86_64.AppImage",
-            "photocraft-0.5.0-linux-x86_64.AppImage",
-        ]);
+        let mut listed = release(&["photocraft-0.4.9-linux-x86_64.AppImage", "photocraft-0.5.0-linux-x86_64.AppImage"]);
         listed.version = crate::version::parse("v0.5.0");
         let platform = Platform { os: Os::Linux, arch: Arch::X64 };
         let pick = |r: &Release| pick_asset(r, &["photocraft"], platform, &[PackageKind::AppImage]).map(|(asset, _)| asset.name.clone());
@@ -332,10 +329,7 @@ mod tests {
 
     #[test]
     fn prerelease_builds_must_match_the_published_prerelease() {
-        let mut listed = release(&[
-            "photocraft-0.6.0-rc.1-windows-x64.msi",
-            "photocraft-0.6.0-rc.2-windows-x64.msi",
-        ]);
+        let mut listed = release(&["photocraft-0.6.0-rc.1-windows-x64.msi", "photocraft-0.6.0-rc.2-windows-x64.msi"]);
         listed.version = crate::version::parse("v0.6.0-rc.2");
         let platform = Platform { os: Os::Windows, arch: Arch::X64 };
         let selected = pick_asset(&listed, &["photocraft"], platform, &[PackageKind::Msi]).map(|(asset, _)| asset.name.clone());
