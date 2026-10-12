@@ -78,7 +78,13 @@ pub fn just_updated_to(paths: &Paths, release: &Release) -> bool {
     let Ok(text) = std::fs::read_to_string(marker(paths)) else { return false };
     let mut lines = text.lines();
     let (Some(tag), Some(at)) = (lines.next(), lines.next().and_then(|a| a.parse::<i64>().ok())) else { return false };
-    tag == release.tag && crate::now() - at < JUST_UPDATED_FOR
+    marker_is_recent(tag, &release.tag, at, crate::now())
+}
+
+/// Never trust a future or malformed timestamp to suppress self-update.
+/// Saturating arithmetic also keeps a corrupt pre-epoch timestamp panic-free.
+fn marker_is_recent(saved_tag: &str, release_tag: &str, saved_at: i64, now: i64) -> bool {
+    saved_tag == release_tag && saved_at <= now && now.saturating_sub(saved_at) < JUST_UPDATED_FOR
 }
 
 fn marker(paths: &Paths) -> PathBuf {
@@ -292,6 +298,30 @@ fn ps_quote_arg(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_marker_rejects_future_expired_or_overflowing_timestamps() {
+        const NOW: i64 = 1_790_000_000;
+        assert!(marker_is_recent("v0.5.0", "v0.5.0", NOW, NOW));
+        assert!(marker_is_recent("v0.5.0", "v0.5.0", NOW - JUST_UPDATED_FOR + 1, NOW));
+        assert!(!marker_is_recent("v0.5.0", "v0.5.0", NOW - JUST_UPDATED_FOR, NOW));
+        assert!(!marker_is_recent("v0.5.0", "v0.6.0", NOW, NOW));
+        assert!(!marker_is_recent("v0.5.0", "v0.5.0", NOW + 1, NOW));
+        assert!(!marker_is_recent("v0.5.0", "v0.5.0", i64::MIN, NOW));
+        assert!(!marker_is_recent("v0.5.0", "v0.5.0", i64::MAX, NOW));
+        assert!(!marker_is_recent("v0.5.0", "v0.5.0", i64::MIN, i64::MAX));
+    }
+
+    #[test]
+    fn corrupt_marker_files_do_not_block_future_self_updates() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let release = Release { tag: "v0.5.0".into(), ..Release::default() };
+        for payload in ["v0.5.0\n", "v0.5.0\nnot-a-timestamp\n", "v0.5.0\n9223372036854775807\n", "v0.5.0\n-9223372036854775808\n"] {
+            crate::paths::write_atomic(&marker(&paths), payload.as_bytes()).unwrap();
+            assert!(!just_updated_to(&paths, &release), "invalid marker: {payload:?}");
+        }
+    }
 
     #[test]
     fn a_version_just_installed_is_not_offered_again() {
