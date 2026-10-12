@@ -1073,7 +1073,9 @@ mod tree {
         while let Some(dir) = stack.pop() {
             for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
                 let p = entry.path();
-                if p.is_dir() {
+                // is_dir() follows symlinks. Inventory only entries inside the
+                // extracted tree; never descend into a link to another directory.
+                if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
                     stack.push(p);
                 } else if let Ok(rel) = p.strip_prefix(root) {
                     out.push(rel.to_path_buf());
@@ -1215,6 +1217,43 @@ pub mod windows {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    #[cfg(unix)]
+    #[test]
+    fn tree_inventory_lists_nested_files_in_sorted_relative_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("tree");
+        std::fs::create_dir_all(root.join("share/icons")).unwrap();
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::fs::write(root.join("bin/photocraft"), b"executable").unwrap();
+        std::fs::write(root.join("share/icons/photocraft.png"), b"icon").unwrap();
+
+        assert_eq!(
+            tree::files(&root),
+            vec![PathBuf::from("bin/photocraft"), PathBuf::from("share/icons/photocraft.png")]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tree_inventory_does_not_follow_directory_symlinks_outside_the_tree() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("tree");
+        let outside = dir.path().join("private");
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(root.join("bin/photocraft"), b"app").unwrap();
+        std::fs::write(outside.join("user-data.txt"), b"must not be inventoried").unwrap();
+        symlink(&outside, root.join("share")).unwrap();
+
+        // A symlink is itself an entry that can be unlinked on uninstall,
+        // but none of its targets must be recorded as launcher-owned files.
+        assert_eq!(tree::files(&root), vec![PathBuf::from("bin/photocraft"), PathBuf::from("share")]);
+        assert_eq!(std::fs::read(outside.join("user-data.txt")).unwrap(), b"must not be inventoried");
+    }
 
     #[test]
     fn swap_keeps_the_old_copy_until_the_new_one_is_in_place() {
