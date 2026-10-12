@@ -127,6 +127,66 @@ mod tests {
     }
 
     #[test]
+    fn every_install_source_has_a_stable_label_and_update_policy() {
+        let expected = [
+            (InstallSource::Launcher, "ArtCraft Launcher", true),
+            (InstallSource::MacApp, "Applications folder", true),
+            (InstallSource::Msi, "Windows Installer", true),
+            (InstallSource::Deb, "Debian package", false),
+            (InstallSource::Rpm, "RPM package", false),
+            (InstallSource::Pacman, "Arch package (AUR)", false),
+            (InstallSource::Flatpak, "Flatpak", false),
+            (InstallSource::AppImage, "AppImage", true),
+            (InstallSource::Binary, "System binary", false),
+        ];
+        for (source, label, may_update) in expected {
+            assert_eq!(source.label(), label, "{source:?}");
+            assert_eq!(source.launcher_can_update(), may_update, "{source:?}");
+            assert_eq!(serde_json::from_str::<InstallSource>(&serde_json::to_string(&source).unwrap()).unwrap(), source);
+        }
+    }
+
+    #[test]
+    fn installed_json_accepts_older_records_without_optional_package() {
+        let previous = r#"{"version":"0.4.1","source":"Deb","location":"/usr/bin/photocraft"}"#;
+        let installed: Installed = serde_json::from_str(previous).unwrap();
+        assert_eq!(installed.version, version::parse("0.4.1"));
+        assert_eq!(installed.source, InstallSource::Deb);
+        assert_eq!(installed.location, "/usr/bin/photocraft");
+        assert_eq!(installed.package, None);
+        let newer = Installed { package: Some("photocraft-bin".into()), ..installed };
+        assert_eq!(serde_json::from_str::<Installed>(&serde_json::to_string(&newer).unwrap()).unwrap(), newer);
+    }
+
+    #[test]
+    fn status_preserves_installed_state_across_offline_and_unknown_releases() {
+        let known = inst("0.4.0");
+        let unknown = inst("invalid version");
+        let latest = Version::new(0, 5, 0);
+
+        for installed in [&known, &unknown] {
+            for result in [Latest::Pending, Latest::Failed, Latest::NoRelease] {
+                assert_eq!(status(Some(installed), result), AppStatus::Installed);
+            }
+            assert_eq!(status(Some(installed), Latest::Found { version: None, has_asset: true }), AppStatus::Installed);
+        }
+        assert_eq!(status(Some(&known), Latest::Found { version: Some(&latest), has_asset: true }), AppStatus::UpdateAvailable);
+        assert_eq!(status(Some(&unknown), Latest::Found { version: Some(&latest), has_asset: true }), AppStatus::Installed);
+        for state in [
+            AppStatus::Checking,
+            AppStatus::Available,
+            AppStatus::UpToDate,
+            AppStatus::UpdateAvailable,
+            AppStatus::Installed,
+            AppStatus::Unavailable,
+            AppStatus::NoRelease,
+        ] {
+            let expected = matches!(state, AppStatus::UpToDate | AppStatus::UpdateAvailable | AppStatus::Installed);
+            assert_eq!(state.is_installed(), expected, "{state:?}");
+        }
+    }
+
+    #[test]
     fn status_covers_every_case() {
         let v5 = Version::new(0, 5, 0);
         let found = |has_asset| Latest::Found { version: Some(&v5), has_asset };
